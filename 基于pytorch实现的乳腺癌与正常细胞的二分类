@@ -1,0 +1,263 @@
+#准确识别和分类乳腺癌亚型
+import torch
+from torch import nn
+import torchvision
+import matplotlib.pyplot as plt
+import warnings
+import numpy as np
+from torch.optim.lr_scheduler import StepLR
+from torch.utils.data import DataLoader
+from torchvision import datasets
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import pandas as pd
+
+
+warnings.filterwarnings("ignore")             #忽略警告信息
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+plt.rcParams['axes.unicode_minus'] = False    # 用来正常显示负号
+
+batch_size = 16
+img_height = 50
+img_width  = 50
+
+#数据预处理
+train_datadir = "../data/26-data"
+test_datadir = '../data/26-data'
+
+
+batch_size = 16
+img_height = 50
+img_width  = 50
+
+#数据预处理
+train_datadir = "../data/26-data"
+test_datadir = '../data/26-data'
+
+
+train_transforms = torchvision.transforms.Compose([
+    torchvision.transforms.Resize([50, 50]),
+    torchvision.transforms.ToTensor(),
+    torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+])
+
+train_data = datasets.ImageFolder(train_datadir,transform=train_transforms)
+
+# 划分训练集和验证集
+train_size = int(0.8 * len(train_data))
+val_size = len(train_data) - train_size
+train_data, val_data = torch.utils.data.random_split(train_data, [train_size, val_size])
+
+# 创建 DataLoader 并设置缓存和预取
+train_loader = DataLoader(train_data, shuffle=True, batch_size=16)
+val_loader = DataLoader(val_data, shuffle=False, batch_size=16)
+
+# 获取类别名称
+class_names = train_data.dataset.classes
+print(class_names)
+
+#检查数据
+for X, y in train_loader:
+    print("shape of X[N,C,H,W]: ",X.shape)
+    print("shape of y: ", y.shape,y.dtype)
+    break
+#shape of X[N,C,H,W]:  torch.Size([16, 3, 50, 50])
+#shape of y:  torch.Size([16]) torch.int64
+
+#定义模型
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print("using {} device".format(device))
+
+
+# 可视化数据
+plt.figure(figsize=(10, 8))
+plt.suptitle("数据展示")
+class_names = ["乳腺癌细胞","正常细胞"]
+for images, labels in train_loader:
+    for i, (image, label) in enumerate(zip(images, labels)):
+        plt.subplot(4, 4, i + 1)
+        plt.xticks([])
+        plt.yticks([])
+        plt.grid(False)
+
+        # 将图像像素值限制在[0, 1]范围内
+        img = image.permute(1, 2, 0).clamp(0, 1)
+
+        # 显示图片
+        plt.imshow(img)
+        # 显示标签
+        plt.xlabel(class_names[label])
+
+plt.show()
+
+
+#构建模型
+import torch
+from torch import nn
+
+class net(nn.Module):
+    def __init__(self):
+        super(net, self).__init__()
+        self.model = nn.Sequential(
+            nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d((2, 2)),
+            nn.Dropout(0.5),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d((2, 2)),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d((2, 2)),
+            nn.Flatten(),
+            nn.Linear(16 * 6 * 6, 2),
+            nn.Softmax(dim=1)
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+model = net()
+print(model)
+
+
+# Train your model
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs=100):
+
+    train_history = {'loss': [], 'accuracy': []}
+    val_history = {'loss': [], 'accuracy': []}
+
+    for epoch in range(num_epochs):
+        # Training phase
+        model.train()
+
+        train_loss = 0.0
+        correct_train = 0
+        total_train = 0
+
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)  # 移动数据到 GPU
+            # Forward pass
+            outputs = model(inputs)
+            # Compute loss
+            loss = criterion(outputs, labels)
+            # Backpropagation
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item() * inputs.size(0)
+            _, predicted = torch.max(outputs, 1)
+            total_train += labels.size(0)
+            correct_train += (predicted == labels).sum().item()
+
+        train_loss /= len(train_loader.dataset)
+        train_accuracy = correct_train / total_train
+        train_history['loss'].append(train_loss)
+        train_history['accuracy'].append(train_accuracy)
+
+        # Validation phase
+        model.eval()
+        val_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(device), labels.to(device)  # 移动数据到 GPU
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, predicted = torch.max(outputs, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        val_loss /= len(val_loader.dataset)
+        val_accuracy = correct / total
+        val_history['loss'].append(val_loss)
+        val_history['accuracy'].append(val_accuracy)
+
+        # Print statistics
+        print('Epoch [{}/{}], Train Loss: {:.4f}, Val Loss: {:.4f}, Val Acc: {:.2f}%'
+              .format(epoch + 1, num_epochs, loss.item(), val_loss / len(val_loader), 100 * correct / total))
+
+        # Update learning rate
+        scheduler.step()
+    return train_history,val_history
+
+
+# Create an instance of the model
+model = net().to(device)
+print(model)
+
+# 定义损失函数和优化器
+loss_fn = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+scheduler = StepLR(optimizer, step_size=1, gamma=0.99)
+
+# Train your model
+# 调用训练函数并记录训练历史
+train_history, val_history = train_model(model, train_loader, val_loader, loss_fn, optimizer, scheduler, num_epochs=20)
+
+# 提取训练历史中的准确率和损失值
+train_acc = train_history['accuracy']
+train_loss = train_history['loss']
+val_acc = val_history['accuracy']
+val_loss = val_history['loss']
+
+# Accuracy 和 loss 图
+epochs_range = range(len(train_acc))
+
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, train_acc, label='Training Accuracy')
+plt.plot(epochs_range, val_acc, label='Validation Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.title('Training and Validation Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, train_loss, label='Training Loss')
+plt.plot(epochs_range, val_loss, label='Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.title('Training and Validation Loss')
+plt.legend()
+
+plt.show()
+
+
+# 定义一个绘制混淆矩阵图的函数
+def plot_cm(labels, predictions,class_names):
+    # 生成混淆矩阵
+    conf_numpy = confusion_matrix(labels, predictions)
+    # 将矩阵转化为 DataFrame
+    conf_df = pd.DataFrame(conf_numpy, index=class_names, columns=class_names)
+
+    plt.figure(figsize=(8, 7))
+
+    sns.heatmap(conf_df, annot=True, fmt="d", cmap="BuPu")
+
+    plt.title('混淆矩阵', fontsize=15)
+    plt.ylabel('真实值', fontsize=14)
+    plt.xlabel('预测值', fontsize=14)
+    plt.show()
+
+# 使用模型对验证集进行预测
+val_pre = []
+val_label = []
+
+model.eval()  # 将模型设置为评估模式
+with torch.no_grad():
+    for images, labels in val_loader:
+        images, labels = images.to(device), labels.to(device)  # 移动数据到 GPU
+        outputs = model(images)
+        _, predicted = torch.max(outputs, 1)
+        val_pre.extend(predicted.cpu().numpy())
+        val_label.extend(labels.cpu().numpy())
+
+# 调用绘制混淆矩阵函数
+plot_cm(val_label, val_pre, class_names)
