@@ -1,4 +1,5 @@
 参考 https://github.com/kzbkzb/Python-AI 的TensorFlower版
+修改为Pytorch版
 Python版本3.9
 Anaconda版本2022.10
 pytorch（GPU版）
